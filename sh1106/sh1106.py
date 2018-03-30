@@ -95,6 +95,12 @@ class SH1106(framebuf.FrameBuffer):
         self.write_cmd(SET_CONTRAST)
         self.write_cmd(contrast)
 
+    def flip(self):
+        self.write_cmd(0xa0)
+        self.write_cmd(SET_COM_PIN_CFG)
+        self.write_cmd(0x22)
+        self.write_cmd(SET_SCAN_DIR)
+
     def invert(self, invert):
         self.write_cmd(SET_NORM_INV | (invert & 1))
 
