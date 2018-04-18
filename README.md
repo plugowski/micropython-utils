@@ -5,3 +5,4 @@ This repository provides some utils for MicroPython such as a drivers, helpers a
 # Utils List
 
 * [MicroPython SH1106 Driver](./sh1106)
+* [MicroPython BME280 Driver](./bme280)

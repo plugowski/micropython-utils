@@ -101,6 +101,17 @@ class SH1106(framebuf.FrameBuffer):
         self.write_cmd(0x22)
         self.write_cmd(SET_SCAN_DIR)
 
+    def vertical_scroll(self, delay=10):
+        show = False
+        self.write_cmd(SET_DISP_START_LINE | 0)
+
+        for x in range(self.height - 1):
+            self.write_cmd(SET_DISP_START_LINE | x)
+            if not show:
+                self.show()
+                show = True
+            time.sleep_ms(delay)
+
     def invert(self, invert):
         self.write_cmd(SET_NORM_INV | (invert & 1))
 
