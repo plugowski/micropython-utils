@@ -1,10 +1,5 @@
-"""
-uwebsocket for MicroPython based on upy-websocket by @BetaRavener
-https://github.com/BetaRavener/upy-websocket-server
-"""
-
 import os
-import usocket as socket
+import socket
 import network
 from time import sleep
 import uselect
@@ -82,12 +77,13 @@ class WebSocketClient:
 
 
 class WebSocketServer:
-    def __init__(self, page, max_connections=1):
+
+    def __init__(self, max_connections: int = 1):
         self._listen_s = None
         self._listen_poll = None
         self._clients = []
         self._max_connections = max_connections
-        self.content_dir = 'www'
+        self._web_dir = 'www'
 
     def _setup_conn(self, port):
         self._listen_s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -99,7 +95,8 @@ class WebSocketServer:
         for i in (network.AP_IF, network.STA_IF):
             iface = network.WLAN(i)
             if iface.active():
-                print("WebSocket started on ws://%s:%d" % (iface.ifconfig()[0], port))
+                self._address = (iface.ifconfig()[0], port)
+                print("WebSocket started on ws://%s:%d" % self._address)
 
     def _check_new_connections(self, accept_handler):
         poll_events = self._listen_poll.poll(0)
@@ -111,14 +108,17 @@ class WebSocketServer:
 
     def _accept_conn(self):
         cl, remote_addr = self._listen_s.accept()
+        data = cl.recv(32)
+
         print("Client connection from:", remote_addr)
+        print('data', data)
 
         if len(self._clients) >= self._max_connections:
             # Maximum connections limit reached
             cl.setblocking(True)
             cl.sendall("HTTP/1.1 503 Too many connections\n\n")
             cl.sendall("\n")
-            #TODO: Make sure the data is sent before closing
+            # TODO: Make sure the data is sent before closing
             sleep(0.1)
             cl.close()
             return
@@ -127,32 +127,19 @@ class WebSocketServer:
             websocket_helper.server_handshake(cl)
         except OSError:
             # Not a websocket connection, serve webpage
-            data = None
-            request_method = None
-            print(data)
+            requested_file = request_method = None
 
-            filepath_to_serve = 'www/index.html'
-
-            # todo: code freeze here :(
-            data = cl.recv(1024)
-            if data is not None:
+            if data:
+                # data should looks like GET /index.html HTTP/1.1\r\nHost: 19'
                 data = data.decode()
                 request_method = data.split(' ')[0]
 
-            if data and request_method == "GET":
-                # Ex) "GET /index.html" split on space
-                file_requested = data.split(' ')[1]
+            if request_method == "GET":
+                # requested file is on second position in data, ignore all get parameters after question mark
+                requested_file = data.split(' ')[1].split('?')[0]
 
-                # If get has parameters ('?'), ignore them
-                file_requested = file_requested.split('?')[0]
-
-                if file_requested == "/":
-                    file_requested = "/index.html"
-
-                filepath_to_serve = self.content_dir + file_requested
-                print(filepath_to_serve)
-
-            self._serve_page(filepath_to_serve, cl)
+            requested_file = "/index.html" if requested_file in [None, '/'] else requested_file
+            self._serve_file(requested_file, cl)
 
             return
 
@@ -161,20 +148,64 @@ class WebSocketServer:
     def _make_client(self, conn):
         return WebSocketClient(conn)
 
-    def _serve_page(self, file, sock):
+    def _serve_file(self, file: str, sock: socket):
         try:
-            # todo: check content-type and serve correct one
-            sock.sendall('HTTP/1.1 200 OK\nConnection: close\nServer: WebSocket Server\nContent-Type: text/html\n')
-            length = os.stat(file)[6]
-            sock.sendall('Content-Length: {}\n\n'.format(length))
+            # todo: check if file is in subdirectory
+            # check if file exists ( file always contains / at the beginning
+            if file[1:] not in os.listdir(self._web_dir):
+                sock.sendall(self._generate_headers(404))
+                sock.sendall(b'<h1>404 Not Found</h1>')
+                sock.close()
+                return
+
+            file_path = self._web_dir + file
+            length = os.stat(file_path)[6]
+            sock.sendall(self._generate_headers(200, file_path, length))
             # Process page by lines to avoid large strings
-            with open(file, 'r') as f:
+            with open(file_path, 'r') as f:
                 for line in f:
                     sock.sendall(line)
         except OSError:
-            # Error while serving webpage
-            pass
+            sock.sendall(self._generate_headers(500))
+
         sock.close()
+
+    @staticmethod
+    def _generate_headers(code: int, file_name: str = None, length: int = None) -> str:
+
+        header = ''
+        content_type = 'text/html'
+
+        http_codes = {
+            200: 'OK',
+            404: 'Not Found',
+            500: 'Internal Server Error'
+        }
+
+        mime_types = {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'html': 'text/html',
+            'htm': 'text/html',
+            'css': 'text/css',
+            'js': 'application/javascript'
+        }
+
+        if code in http_codes:
+            header = 'HTTP/1.1 {} {}\n'.format(code, http_codes[code])
+
+        if file_name is not None:
+            ext = file_name.split('.')[1]
+            if ext in mime_types:
+                content_type = mime_types[ext]
+
+        header += 'Content-Type: {}\n'.format(content_type)
+        header += 'Content-Length: {}\n'.format(length)
+        header += 'Server: ESPServer\n'
+        header += 'Connection: close\n\n'  # Close connection after completing the request
+        return header
 
     def stop(self):
         if self._listen_poll:
