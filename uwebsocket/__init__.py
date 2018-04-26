@@ -13,7 +13,7 @@ class ClientClosedError(Exception):
 
 
 class WebSocketConnection:
-    def __init__(self, addr, s, close_callback):
+    def __init__(self, addr: str, s: socket, close_callback):
         self.client_close = False
         self._need_check = False
 
@@ -69,7 +69,7 @@ class WebSocketConnection:
 
 
 class WebSocketClient:
-    def __init__(self, conn):
+    def __init__(self, conn: WebSocketConnection):
         self.connection = conn
 
     def process(self):
@@ -85,7 +85,10 @@ class WebSocketServer:
         self._max_connections = max_connections
         self._web_dir = 'www'
 
-    def _setup_conn(self, port):
+    def _make_client(self, conn: WebSocketConnection) -> WebSocketClient:
+        return WebSocketClient(conn)
+
+    def _setup_conn(self, port: int):
         self._listen_s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listen_s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listen_poll = uselect.poll()
@@ -108,54 +111,40 @@ class WebSocketServer:
 
     def _accept_conn(self):
         cl, remote_addr = self._listen_s.accept()
-        data = cl.recv(32)
-
         print("Client connection from:", remote_addr)
-        print('data', data)
 
         if len(self._clients) >= self._max_connections:
             # Maximum connections limit reached
             cl.setblocking(True)
-            cl.sendall("HTTP/1.1 503 Too many connections\n\n")
-            cl.sendall("\n")
-            # TODO: Make sure the data is sent before closing
-            sleep(0.1)
-            cl.close()
+            self._generate_static_page(cl, 503, '503 Too Many Connections')
+            return
+
+        data = cl.recv(64).decode()
+        if data and 'Upgrade: websocket' not in data.split('\r\n') and 'GET' == data.split(' ')[0]:
+            # data should looks like GET /index.html HTTP/1.1\r\nHost: 19'
+            # requested file is on second position in data, ignore all get parameters after question mark
+            requested_file = data.split(' ')[1].split('?')[0]
+            requested_file = "/index.html" if requested_file in [None, '/'] else requested_file
+
+            cl.setblocking(True)
+            self._serve_file(requested_file, cl)
             return
 
         try:
             websocket_helper.server_handshake(cl)
+            self._clients.append(self._make_client(WebSocketConnection(remote_addr, cl, self.remove_connection)))
         except OSError:
-            # Not a websocket connection, serve webpage
-            requested_file = request_method = None
-
-            if data:
-                # data should looks like GET /index.html HTTP/1.1\r\nHost: 19'
-                data = data.decode()
-                request_method = data.split(' ')[0]
-
-            if request_method == "GET":
-                # requested file is on second position in data, ignore all get parameters after question mark
-                requested_file = data.split(' ')[1].split('?')[0]
-
-            requested_file = "/index.html" if requested_file in [None, '/'] else requested_file
-            self._serve_file(requested_file, cl)
-
-            return
-
-        self._clients.append(self._make_client(WebSocketConnection(remote_addr, cl, self.remove_connection)))
-
-    def _make_client(self, conn):
-        return WebSocketClient(conn)
+            self._generate_static_page(cl, 500, '500 Internal Server Error [2]')
 
     def _serve_file(self, file: str, sock: socket):
         try:
-            # todo: check if file is in subdirectory
-            # check if file exists ( file always contains / at the beginning
-            if file[1:] not in os.listdir(self._web_dir):
-                sock.sendall(self._generate_headers(404))
-                sock.sendall(b'<h1>404 Not Found</h1>')
-                sock.close()
+            # check if file exists in web directory
+            path = file.split('/')
+            filename = path[-1]
+            subdir = '/' + '/'.join(path[1:-1]) if len(path) > 2 else ''
+
+            if filename not in os.listdir(self._web_dir + subdir):
+                self._generate_static_page(sock, 404, '404 Not Found')
                 return
 
             file_path = self._web_dir + file
@@ -165,10 +154,10 @@ class WebSocketServer:
             with open(file_path, 'r') as f:
                 for line in f:
                     sock.sendall(line)
+            sleep(0.1)
+            sock.close()
         except OSError:
-            sock.sendall(self._generate_headers(500))
-
-        sock.close()
+            self._generate_static_page(sock, 500, '500 Internal Server Error [2]')
 
     @staticmethod
     def _generate_headers(code: int, file_name: str = None, length: int = None) -> str:
@@ -179,7 +168,8 @@ class WebSocketServer:
         http_codes = {
             200: 'OK',
             404: 'Not Found',
-            500: 'Internal Server Error'
+            500: 'Internal Server Error',
+            503: 'Service Unavailable'
         }
 
         mime_types = {
@@ -207,6 +197,13 @@ class WebSocketServer:
         header += 'Connection: close\n\n'  # Close connection after completing the request
         return header
 
+    @staticmethod
+    def _generate_static_page(sock: socket, code: int, message: str):
+        sock.sendall(WebSocketServer._generate_headers(code))
+        sock.sendall('<html><body><h1>' + message + '</h1></body></html>')
+        sleep(0.1)
+        sock.close()
+
     def stop(self):
         if self._listen_poll:
             self._listen_poll.unregister(self._listen_s)
@@ -219,7 +216,7 @@ class WebSocketServer:
             client.connection.close()
         print("Stopped WebSocket server.")
 
-    def start(self, port=80):
+    def start(self, port: int = 80):
         if self._listen_s:
             self.stop()
         self._setup_conn(port)
