@@ -29,7 +29,15 @@ display = sh1106.SH1106_SPI(width, height, spi, dc, res, cs)
 
 
 ## Framebuffer Methods
-Driver extends `frambuf` which means that all methods are available here.
+`frambuf` is available as parameter which you can use. For example:
+
+```python
+import framebuf
+
+fb = framebuf.FrameBuffer(bitmap_bytearray, 48, 64, framebuf.MONO_HLSB)
+display.framebuf.blit(fb, 40, 0)
+display.show()
+```
 
 ## Sample Code
 
