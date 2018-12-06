@@ -46,7 +46,7 @@ SET_VCOM_DESEL = const(0xdb)
 SET_CHARGE_PUMP = const(0x8d)
 
 
-class SH1106(framebuf.FrameBuffer):
+class SH1106:
 
     def __init__(self, width, height, external_vcc):
         self.width = width
@@ -54,7 +54,7 @@ class SH1106(framebuf.FrameBuffer):
         self.external_vcc = external_vcc
         self.pages = self.height // 8
         self.buffer = bytearray(self.pages * self.width)
-        super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
+        self.framebuf = framebuf.FrameBuffer(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
         self.init_display()
 
     def init_display(self):
@@ -81,6 +81,18 @@ class SH1106(framebuf.FrameBuffer):
             self.write_cmd(cmd)
         self.fill(0)
         self.show()
+
+    def fill(self, col):
+        self.framebuf.fill(col)
+
+    def pixel(self, x, y, col):
+        self.framebuf.pixel(x, y, col)
+
+    def scroll(self, dx, dy):
+        self.framebuf.scroll(dx, dy)
+
+    def text(self, string, x, y, col=1):
+        self.framebuf.text(string, x, y, col)
 
     def poweroff(self):
         self.write_cmd(SET_DISP | 0x00)
@@ -138,10 +150,12 @@ class SH1106_I2C(SH1106):
     def write_data(self, buf):
         self.temp[0] = self.addr << 1
         self.temp[1] = 0x40  # Co=0, D/C#=1
+        self.i2c.begin(0)
         self.i2c.start()
-        self.i2c.write(self.temp)
-        self.i2c.write(buf)
+        self.i2c.write_bytes(self.temp)
+        self.i2c.write_bytes(buf)
         self.i2c.stop()
+        self.i2c.end()
 
 
 class SH1106_SPI(SH1106):
